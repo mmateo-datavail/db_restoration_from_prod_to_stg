@@ -2213,6 +2213,9 @@ class RDSRecreator:
             }
 
 def main():
+    current_string = time.ctime()
+    print("Beginning execution at:", current_string)
+    
     """Main function to handle command line arguments and execute recreation"""
     if len(sys.argv) not in (10, 11):
         print("Usage: python v4_dbRestoration.py <json_file_path> <snapshot_arn> <region> <secret_arn> <username_secret_key> <password_secret_key> <mode: only-restore|restore-and-delete> <old_db_identifier> <new_db_identifier> [<new_db_cluster_identifier>]")
@@ -2291,6 +2294,8 @@ def main():
             
             if not ("Renamed" in rename_db_resources):
                 print("Failed to rename DB resources.")
+                current_string = time.ctime()
+                print("Ending execution at:", current_string)
                 sys.exit(1)
 
         # PHASE 2: Gather old Database metadata and snapshot, and Recreate new Database from mentioned files
@@ -2335,6 +2340,8 @@ def main():
                 
             except Exception as e:
                 print(f"\nUnexpected error: {str(e)}")
+                current_string = time.ctime()
+                print("Ending execution at:", current_string)
                 sys.exit(1)
             
             # PHASE 4: Delete old Database (only if mode is restore-and-delete)
@@ -2344,23 +2351,35 @@ def main():
                     delete_response = recreator.delete_db_resources(old_db_identifier)
                     print("\nPHASE 4 completed: Old DB resources removed successfully. Status: ", delete_response)
                     print("\n\nProcess successfully completed, DB recreation finished for", new_db_identifier)
+                    current_string = time.ctime()
+                    print("Ending execution at:", current_string)
                     
                 except Exception as e:
                     print(f"\nUnexpected error: {str(e)}")
+                    current_string = time.ctime()
+                    print("Ending execution at:", current_string)
                     sys.exit(1)
             else:
                 print("\n\nProcess successfully completed, DB recreation finished for", new_db_identifier)
+                current_string = time.ctime()
+                print("Ending execution at:", current_string)
             
             
         else:
             print(f"\nERROR: Recreation failed - {result['error']}")
+            current_string = time.ctime()
+            print("Ending execution at:", current_string)
             sys.exit(1)
             
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
+        current_string = time.ctime()
+        print("Ending execution at:", current_string)
         sys.exit(1)
     except Exception as e:
         print(f"\nUnexpected error: {str(e)}")
+        current_string = time.ctime()
+        print("Ending execution at:", current_string)
         sys.exit(1)
 
 if __name__ == "__main__":

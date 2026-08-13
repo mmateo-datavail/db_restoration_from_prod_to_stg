@@ -1,3 +1,14 @@
+/venv
+#   This line tells Git to ignore the 'venv' directory, which is commonly used for Python virtual environments.
+
+/.vscode
+#   This line tells Git to ignore the '.vscode' directory, which is used by Visual Studio Code to store workspace settings and configurations.
+
+# This file is used to ignore files that are generated during the database restoration process from production to staging.
+# The following files are ignored:
+01_db_instance_details.json
+02_metadata_extraction_report.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

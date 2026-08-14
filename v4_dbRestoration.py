@@ -812,6 +812,41 @@ class RDSRecreator:
             logger.error(f"Failed to stop DB resources for '{db_instance_identifier}': {str(e)}")
             raise
 
+    def _wait_for_db_identifier_rename(self, resource_type: str, original_identifier: str, renamed_identifier: str, max_attempts: int = 1000, expected_status: str = 'available') -> bool:
+        """Poll until the renamed identifier is visible and ready. This handles the eventual consistency
+        window between Azure's rename call and the subsequent describe calls."""
+        for attempt in range(max_attempts):
+            try:
+                if resource_type == 'db-cluster':
+                    response = self.rds_client.describe_db_clusters(DBClusterIdentifier=renamed_identifier)
+                    cluster = response['DBClusters'][0]
+                    status = cluster.get('Status')
+                    if status == expected_status:
+                        logger.info(f"DB cluster '{renamed_identifier}' is available after rename")
+                        return True
+                    logger.info(f"DB cluster '{renamed_identifier}' is in status '{status}' during rename propagation; waiting...")
+                elif resource_type == 'db-instance':
+                    response = self.rds_client.describe_db_instances(DBInstanceIdentifier=renamed_identifier)
+                    instance = response['DBInstances'][0]
+                    status = instance.get('DBInstanceStatus')
+                    if status == expected_status:
+                        logger.info(f"DB instance '{renamed_identifier}' is available after rename")
+                        return True
+                    logger.info(f"DB instance '{renamed_identifier}' is in status '{status}' during rename propagation; waiting...")
+            except ClientError as e:
+                error_code = e.response['Error']['Code']
+                if 'NotFound' in error_code:
+                    logger.info(f"Rename still propagating: '{renamed_identifier}' not found yet while waiting for '{original_identifier}' -> '{renamed_identifier}'")
+                else:
+                    logger.warning(f"Unexpected error while polling rename for '{renamed_identifier}': {str(e)}")
+            except Exception as e:
+                logger.warning(f"Unexpected polling error for '{renamed_identifier}': {str(e)}")
+
+            time.sleep(30)
+
+        logger.error(f"Timed out waiting for '{renamed_identifier}' to become '{expected_status}' after rename from '{original_identifier}'")
+        return False
+
     def rename_db_resources(self, db_instance_identifier: str, max_attempts: int = 1000) -> str:
         """Rename DB instance/cluster and its instances by appending '-OLD' and wait until available."""
         resources = self._resolve_db_resources(db_instance_identifier)
@@ -820,55 +855,89 @@ class RDSRecreator:
             if resources.get('cluster_id'):
                 cluster_id = resources['cluster_id']
                 new_cluster_id = f"{cluster_id}-OLD"
-                logger.info(f"Renaming DB cluster '{cluster_id}' to '{new_cluster_id}'")
-                try:
-                    self.rds_client.modify_db_cluster(DBClusterIdentifier=cluster_id, NewDBClusterIdentifier=new_cluster_id)
-                except ClientError as e:
-                    error_code = e.response['Error']['Code']
-                    if error_code == 'DBClusterNotFoundFault':
-                        logger.info(f"DB cluster '{cluster_id}' not found when attempting rename")
-                    else:
-                        logger.error(f"Failed to rename DB cluster '{cluster_id}': {str(e)}")
-                        raise
 
-                # Wait for new cluster name to become available
-                if not self.wait_for_resource('db-cluster', new_cluster_id, max_attempts=max_attempts, expected_status='available'):
-                    raise Exception(f"Timed out waiting for DB cluster '{new_cluster_id}' to become available after rename")
+                # If the target identifier already exists, assume the rename was already completed.
+                try:
+                    self.rds_client.describe_db_clusters(DBClusterIdentifier=new_cluster_id)
+                    logger.info(f"DB cluster '{new_cluster_id}' already exists; rename already completed.")
+                    cluster_rename_complete = True
+                except ClientError:
+                    cluster_rename_complete = False
+
+                if not cluster_rename_complete:
+                    logger.info(f"Renaming DB cluster '{cluster_id}' to '{new_cluster_id}'")
+                    try:
+                        self.rds_client.modify_db_cluster(
+                            DBClusterIdentifier=cluster_id,
+                            NewDBClusterIdentifier=new_cluster_id,
+                            ApplyImmediately=True
+                        )
+                    except ClientError as e:
+                        error_code = e.response['Error']['Code']
+                        if error_code == 'DBClusterNotFoundFault':
+                            logger.info(f"DB cluster '{cluster_id}' not found when attempting rename")
+                        else:
+                            logger.error(f"Failed to rename DB cluster '{cluster_id}': {str(e)}")
+                            raise
+
+                    if not self._wait_for_db_identifier_rename('db-cluster', cluster_id, new_cluster_id, max_attempts=max_attempts, expected_status='available'):
+                        raise Exception(f"Timed out waiting for DB cluster '{new_cluster_id}' to become available after rename")
 
                 # Rename all instances in the cluster
                 for instance_id in resources.get('instance_ids', []):
                     new_instance_id = f"{instance_id}-OLD"
-                    logger.info(f"Renaming DB instance '{instance_id}' to '{new_instance_id}'")
-                    try:
-                        self.rds_client.modify_db_instance(DBInstanceIdentifier=instance_id, NewDBInstanceIdentifier=new_instance_id)
-                    except ClientError as e:
-                        error_code = e.response['Error']['Code']
-                        if error_code == 'DBInstanceNotFound':
-                            logger.info(f"DB instance '{instance_id}' not found when attempting rename")
-                        else:
-                            logger.error(f"Failed to rename DB instance '{instance_id}': {str(e)}")
-                            raise
 
-                    if not self.wait_for_resource('db-instance', new_instance_id, max_attempts=max_attempts, expected_status='available'):
-                        raise Exception(f"Timed out waiting for DB instance '{new_instance_id}' to become available after rename")
+                    try:
+                        self.rds_client.describe_db_instances(DBInstanceIdentifier=new_instance_id)
+                        logger.info(f"DB instance '{new_instance_id}' already exists; rename already completed.")
+                        instance_rename_complete = True
+                    except ClientError:
+                        instance_rename_complete = False
+
+                    if not instance_rename_complete:
+                        logger.info(f"Renaming DB instance '{instance_id}' to '{new_instance_id}'")
+                        try:
+                            self.rds_client.modify_db_instance(
+                                DBInstanceIdentifier=instance_id,
+                                NewDBInstanceIdentifier=new_instance_id,
+                                ApplyImmediately=True
+                            )
+                        except ClientError as e:
+                            error_code = e.response['Error']['Code']
+                            if error_code == 'DBInstanceNotFound':
+                                logger.info(f"DB instance '{instance_id}' not found when attempting rename")
+                            else:
+                                logger.error(f"Failed to rename DB instance '{instance_id}': {str(e)}")
+                                raise
+
+                        if not self._wait_for_db_identifier_rename('db-instance', instance_id, new_instance_id, max_attempts=max_attempts, expected_status='available'):
+                            raise Exception(f"Timed out waiting for DB instance '{new_instance_id}' to become available after rename")
 
                 return f"Renamed cluster '{cluster_id}' and instances to '-OLD' suffix."
             else:
                 # Standalone instance
                 new_instance_id = f"{db_instance_identifier}-OLD"
-                logger.info(f"Renaming DB instance '{db_instance_identifier}' to '{new_instance_id}'")
                 try:
-                    self.rds_client.modify_db_instance(DBInstanceIdentifier=db_instance_identifier, NewDBInstanceIdentifier=new_instance_id)
-                except ClientError as e:
-                    error_code = e.response['Error']['Code']
-                    if error_code == 'DBInstanceNotFound':
-                        logger.info(f"DB instance '{db_instance_identifier}' not found when attempting rename")
-                    else:
-                        logger.error(f"Failed to rename DB instance '{db_instance_identifier}': {str(e)}")
-                        raise
+                    self.rds_client.describe_db_instances(DBInstanceIdentifier=new_instance_id)
+                    logger.info(f"DB instance '{new_instance_id}' already exists; rename already completed.")
+                except ClientError:
+                    logger.info(f"Renaming DB instance '{db_instance_identifier}' to '{new_instance_id}'")
+                    try:
+                        self.rds_client.modify_db_instance(
+                            DBInstanceIdentifier=db_instance_identifier,
+                            NewDBInstanceIdentifier=new_instance_id,
+                            ApplyImmediately=True
+                        )
+                    except ClientError as e:
+                        error_code = e.response['Error']['Code']
+                        if error_code == 'DBInstanceNotFound':
+                            logger.info(f"DB instance '{db_instance_identifier}' not found when attempting rename")
+                        else:
+                            logger.error(f"Failed to rename DB instance '{db_instance_identifier}': {str(e)}")
+                            raise
 
-                if not self.wait_for_resource('db-instance', new_instance_id, max_attempts=max_attempts, expected_status='available'):
-                    raise Exception(f"Timed out waiting for DB instance '{new_instance_id}' to become available after rename")
+                    if not self._wait_for_db_identifier_rename('db-instance', db_instance_identifier, new_instance_id, max_attempts=max_attempts, expected_status='available'):
+                        raise Exception(f"Timed out waiting for DB instance '{new_instance_id}' to become available after rename")
 
                 return f"Renamed DB instance '{db_instance_identifier}' to '{new_instance_id}'."
         except Exception as e:
@@ -1780,7 +1849,7 @@ class RDSRecreator:
 
                 logger.info(
                     f"DB instance with status='{status}' is in transitional state:..."
-                    f"\nPending modifications={pending}"
+                    f"\n                         Pending modifications={pending}"
                 )
             except Exception as exc:
                 logger.warning(f"Error checking RDS instance state for '{instance_identifier}': {exc}")
@@ -2352,6 +2421,8 @@ def main():
             if perform_stop_and_delete:
                 print("\nPHASE 4:Deleting old DB resources...")
                 try:
+                    old_db_identifier = old_db_identifier + "-old"
+                    print("PHASE 4: Deleting old: ", old_db_identifier)
                     delete_response = recreator.delete_db_resources(old_db_identifier)
                     print("\nPHASE 4 completed: Old DB resources removed successfully. Status: ", delete_response)
                     print("\n\nProcess successfully completed, DB recreation finished for", new_db_identifier)

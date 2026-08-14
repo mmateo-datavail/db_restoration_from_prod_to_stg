@@ -634,28 +634,36 @@ class RDSRecreator:
                     logger.info(f"DB cluster status: {status}")
                 elif resource_type == 'db-instance':
                     response = self.rds_client.describe_db_instances(DBInstanceIdentifier=resource_name)
-                    status = response['DBInstances'][0]['DBInstanceStatus']
+                    instance = response['DBInstances'][0]
+                    status = instance['DBInstanceStatus']
+                    pending = instance.get('PendingModifiedValues', {})
                     if expected_status == 'available':
-                        if status == 'modifying':
-                            seen_modifying = True
-                            logger.info(f"DB instance '{resource_name}' is in transitional state: {status}")
-                        elif status == 'resetting-master-credentials':
-                            seen_resetting = True
-                            logger.info(f"DB instance '{resource_name}' is in transitional state: {status}")
+                        if status in ['modifying', 'configuring-enhanced-monitoring', 'resetting-master-credentials', 'backing-up']:
+                            if status == 'modifying':
+                                seen_modifying = True
+                            if status == 'resetting-master-credentials':
+                                seen_resetting = True
+                            logger.info(f"DB instance '{resource_name}' is in transitional state: {status}; pending={pending}")
                         elif status == 'available':
                             if require_reset:
-                                if seen_modifying and seen_resetting:
-                                    logger.info(f"DB instance '{resource_name}' has passed through modifying and resetting-master-credentials and is now available")
+                                master_password_pending = 'MasterUserPassword' in pending
+                                if not master_password_pending or seen_modifying or seen_resetting:
+                                    logger.info(
+                                        f"DB instance '{resource_name}' is available and the required reset/transitional states are complete."
+                                        # f"DB instance '{resource_name}' is available and the required reset/transitional states are complete; "
+                                        # f"pending={pending}, seen_modifying={seen_modifying}, seen_resetting={seen_resetting}"
+                                    )
                                     return True
-                                logger.info(f"DB instance '{resource_name}' is available but has not yet passed through the required transitional states; continuing to wait...")
+                                logger.info(
+                                    f"DB instance '{resource_name}' is available but has not yet cleared the required reset state; "
+                                    f"pending={pending}, seen_modifying={seen_modifying}, seen_resetting={seen_resetting}; continuing to wait..."
+                                )
                             else:
                                 logger.info(f"DB instance '{resource_name}' is available")
                                 return True
                         elif status in ['failed', 'incompatible-parameters', 'incompatible-option-group']:
                             logger.error(f"DB instance '{resource_name}' is in failed state: {status}")
                             return False
-                        elif status == 'backing-up':
-                            logger.info(f"DB instance '{resource_name}' is in transitional state: {status}")
                         else:
                             logger.info(f"DB instance status: {status}")
                     elif expected_status in ['stopped', 'deleting']:
@@ -1436,7 +1444,11 @@ class RDSRecreator:
             'Engine': engine
         }
         
-        try:
+        try:            
+            # Availability Zone
+            if db_info.get('availability_zone'):
+                create_params['AvailabilityZone'] = db_info['availability_zone']
+            
             if db_info.get('multi_az'):
                 print("multi_az value is: ", db_info.get('multi_az'))
                 print("multi_az value is: ", db_info.get('multi_az', False))
@@ -1716,6 +1728,76 @@ class RDSRecreator:
             logger.warning(f"Error applying post-restore modifications: {str(e)}")
             return False
 
+    def _wait_for_aurora_cluster_ready(self, cluster_identifier: str, timeout_seconds: int = 600, poll_interval: int = 10) -> bool:
+        """Wait for an Aurora cluster to leave the resetting-master-password state and become available."""
+        deadline = time.time() + timeout_seconds
+        last_status = None
+
+        while time.time() < deadline:
+            try:
+                resp = self.rds_client.describe_db_clusters(DBClusterIdentifier=cluster_identifier)
+                cluster = resp.get('DBClusters', [{}])[0]
+                status = cluster.get('Status')
+                if status:
+                    last_status = status
+                pending = cluster.get('PendingModifiedValues', {})
+                if status == 'available' and 'MasterUserPassword' not in pending:
+                    logger.info(f"Aurora cluster '{cluster_identifier}' is available and no longer resetting master password.")
+                    return True
+                logger.info(f"Aurora cluster '{cluster_identifier}' status is '{status}' with pending={pending}; waiting for available/resetting-master-password to finish...")
+            except Exception as exc:
+                logger.warning(f"Error checking Aurora cluster state for '{cluster_identifier}': {exc}")
+            time.sleep(poll_interval)
+
+        logger.warning(f"Timed out waiting for Aurora cluster '{cluster_identifier}' to become available after master password reset; last status='{last_status}'")
+        return False
+
+    def _wait_for_rds_instance_ready(self, instance_identifier: str, timeout_seconds: int = 600, poll_interval: int = 10, max_attempts: Optional[int] = None) -> bool:
+        """Wait for an RDS instance to finish transient states after a restore or password reset."""
+        deadline = time.time() + timeout_seconds
+        last_status = None
+
+        # if max_attempts is None:
+        #     max_attempts = max(1, int(timeout_seconds / poll_interval) + 1)
+
+        max_attempts = 1000
+        
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.rds_client.describe_db_instances(DBInstanceIdentifier=instance_identifier)
+                instance = resp.get('DBInstances', [{}])[0]
+                status = instance.get('DBInstanceStatus')
+                if status:
+                    last_status = status
+                pending = instance.get('PendingModifiedValues', {})
+
+                if status == 'available' and 'MasterUserPassword' not in pending:
+                    logger.info(
+                        f"RDS instance '{instance_identifier}' is available and no longer resetting master password; "
+                        f"pending={pending}, last_status={last_status}"
+                    )
+                    return True
+
+                logger.info(
+                    f"DB instance with status='{status}' is in transitional state:..."
+                    f"Pending modifications={pending}"
+                )
+            except Exception as exc:
+                logger.warning(f"Error checking RDS instance state for '{instance_identifier}': {exc}")
+
+            if time.time() >= deadline:
+                break
+
+            if attempt < max_attempts:
+                time.sleep(poll_interval)
+                logger.info(f"Ticks before cancelling attempt {attempt}/{max_attempts} - still waiting...\n")
+
+        logger.warning(
+            f"Timed out waiting for RDS instance '{instance_identifier}' to become available after post-restore changes; "
+            f"last status='{last_status}'"
+        )
+        return False
+
     def _apply_aurora_post_restore_modifications(self, instance_identifier: str, cluster_identifier: str, db_info: Dict[str, Any], master_password: Optional[str] = "password") -> bool:
         """Apply Aurora cluster post-restore modifications"""
         # modify_db_cluster expects DBClusterIdentifier; keep instance identifier separate
@@ -1728,44 +1810,45 @@ class RDSRecreator:
         modifications_needed = False
         
         try:
-            try:
-                print("Look here")
-                print("9 EngineLifecycleSupport value is:", db_info.get('EngineLifecycleSupport'))
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("10 EngineLifecycleSupport value is:", db_info.get('engine_lifecycle_support'))
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("11 EngineLifecycleSupport value is:", db_info['EngineLifecycleSupport'])
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("12 EngineLifecycleSupport value is:", db_info['engine_lifecycle_support'])
-
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("13 EngineLifecycleSupport value is:", db_info.get('MultiAZ'))
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("14 EngineLifecycleSupport value is:", db_info.get('multi_az'))
-
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("15 EngineLifecycleSupport value is:", db_info['MultiAZ'])
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-            try:
-                print("16 EngineLifecycleSupport value is:", db_info['multi_az'])
-            except Exception as e:
-                logger.warning(f"Exception 1: {str(e)}")
-                
             
-            
+            # try:
+            #     print("Look here")
+            #     print("9 EngineLifecycleSupport value is:", db_info.get('EngineLifecycleSupport'))
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("10 EngineLifecycleSupport value is:", db_info.get('engine_lifecycle_support'))
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("11 EngineLifecycleSupport value is:", db_info['EngineLifecycleSupport'])
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("12 EngineLifecycleSupport value is:", db_info['engine_lifecycle_support'])
+
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("13 EngineLifecycleSupport value is:", db_info.get('MultiAZ'))
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("14 EngineLifecycleSupport value is:", db_info.get('multi_az'))
+
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("15 EngineLifecycleSupport value is:", db_info['MultiAZ'])
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+            # try:
+            #     print("16 EngineLifecycleSupport value is:", db_info['multi_az'])
+            # except Exception as e:
+            #     logger.warning(f"Exception 1: {str(e)}")
+                            
+                        
+                        
             if db_info.get('engine_lifecycle_support'):
                 cluster_modify_params['EngineLifecycleSupport'] = db_info['engine_lifecycle_support']
                 modifications_needed = True
@@ -1785,18 +1868,20 @@ class RDSRecreator:
                 cluster_modify_params['PreferredBackupWindow'] = db_info['preferred_backup_window']
                 modifications_needed = True
             
-            # if db_info.get('preferred_maintenance_window'):
-            #     modify_params['PreferredMaintenanceWindow'] = db_info['preferred_maintenance_window']
-            #     modifications_needed = True
-            
             if modifications_needed:
                 logger.info("Applying post-restore cluster modifications...")
-                # Apply cluster-level modifications
                 try:
                     self.rds_client.modify_db_cluster(**cluster_modify_params)
                     logger.info("Post-restore cluster modifications applied successfully")
                 except ClientError as e:
                     logger.warning(f"Failed to apply some post-restore cluster modifications: {str(e)}")
+                    return False
+
+                if master_password:
+                    timeout = db_info.get('post_modify_wait_timeout', 600)
+                    logger.info(f"Waiting for Aurora cluster '{cluster_identifier}' to finish resetting master password before continuing...")
+                    if not self._wait_for_aurora_cluster_ready(cluster_identifier, timeout_seconds=timeout, poll_interval=5):
+                        logger.warning(f"Aurora cluster '{cluster_identifier}' did not finish the reset/availability transitional state within {timeout}s.")
 
                 # Also ensure instance-level password change is applied for writer instance
                 try:
@@ -1812,19 +1897,24 @@ class RDSRecreator:
             return False
 
     def _apply_aurora_instance_post_restore_modifications(self, instance_identifier: str, db_info: Dict[str, Any], master_password: Optional[str] = "password") -> bool:
-        """Apply Aurora instance post-restore modifications"""
+        """Apply Aurora instance post-restore modifications.
+
+        For Aurora cluster members, MasterUserPassword must be changed at the cluster level via
+        modify_db_cluster, not on individual DB instances. This method intentionally excludes
+        MasterUserPassword to avoid InvalidParameterCombination errors.
+        """
         modify_params = {
             'DBInstanceIdentifier': instance_identifier,
             'ApplyImmediately': True
         }
-        
+
         modifications_needed = False
-        
+
         try:
+            # Aurora DB instances within a cluster do not accept MasterUserPassword updates via
+            # modify_db_instance. Password changes must be applied to the DB cluster instead.
             if master_password:
-                modify_params['MasterUserPassword'] = master_password
-                modifications_needed = True
-                logger.info(f"Setting master password for Aurora instance '{instance_identifier}'")
+                logger.info(f"Aurora password change is managed at cluster level for instance '{instance_identifier}'. Skipping instance-level password update.")
 
             if db_info.get('monitoring_interval', 0) > 0:
                 modify_params['MonitoringInterval'] = db_info['monitoring_interval']
@@ -1845,25 +1935,6 @@ class RDSRecreator:
                 self.rds_client.modify_db_instance(**modify_params)
                 logger.info("Post-restore Aurora instance modifications applied successfully")
 
-                # Ensure master password reset actually completed: wait until pending modified values no longer include MasterUserPassword
-                if master_password:
-                    timeout = db_info.get('post_modify_wait_timeout', 600)
-                    interval = 5
-                    waited = 0
-                    while waited < timeout:
-                        try:
-                            resp = self.rds_client.describe_db_instances(DBInstanceIdentifier=instance_identifier)
-                            inst = resp.get('DBInstances', [])[0]
-                            pending = inst.get('PendingModifiedValues', {})
-                            if 'MasterUserPassword' not in pending:
-                                break
-                        except Exception:
-                            pass
-                        time.sleep(interval)
-                        waited += interval
-                    if waited >= timeout:
-                        logger.warning(f"Timed out waiting for master password reset to complete for instance {instance_identifier}")
-
             return modifications_needed
         except ClientError as e:
             logger.warning(f"Failed to apply some post-restore Aurora instance modifications: {str(e)}")
@@ -1879,83 +1950,20 @@ class RDSRecreator:
         modifications_needed = False
         
         try:
-            #  try:
-            #     print("Look here")
-            #     print("1 EngineLifecycleSupport value is:", db_info.get('EngineLifecycleSupport'))
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            
-            # if modifications_needed:
-            #     logger.info("Applying post-restore modifications...")
-            #     self.rds_client.modify_db_instance(**modify_params)
-            #     logger.info("Post-restore modifications applied successfully")
-
-            #     # Ensure master password reset actually completed: wait until pending modified values no longer include MasterUserPassword
-            #     if master_password:
-            #         timeout = db_info.get('post_modify_wait_timeout', 600)
-            #         interval = 5
-            #         waited = 0
-            #         while waited < timeout:
-            #             try:
-            #                 resp = self.rds_client.describe_db_instances(DBInstanceIdentifier=instance_identifier)
-            #                 inst = resp.get('DBInstances', [])[0]
-            #                 pending = inst.get('PendingModifiedValues', {})
-            #                 if 'MasterUserPassword' not in pending:
-            #                     break
-            #             except Exception:
-            #                 pass
-            #             time.sleep(interval)
-            #             waited += interval
-            #         if waited >= timeout:
-            #             logger.warning(f"Timed out waiting for master password reset to complete for instance {instance_identifier}")
-            # try:
-            #     print("2 EngineLifecycleSupport value is:", db_info.get('engine_lifecycle_support'))
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # try:
-            #     print("3 EngineLifecycleSupport value is:", db_info['EngineLifecycleSupport'])
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # try:
-            #     print("4 EngineLifecycleSupport value is:", db_info['engine_lifecycle_support'])
-
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # try:
-            #     print("5 EngineLifecycleSupport value is:", db_info.get('MultiAZ'))
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # try:
-            #     print("6 EngineLifecycleSupport value is:", db_info.get('multi_az'))
-
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # try:
-            #     print("7 EngineLifecycleSupport value is:", db_info['MultiAZ'])
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # try:
-            #     print("8 EngineLifecycleSupport value is:", db_info['multi_az'])
-            # except Exception as e:
-            #     logger.warning(f"Exception 1: {str(e)}")
-            # Wait 15 seconds after instance becomes available to allow modifications to begin
-            logger.info("Waiting 15 seconds before applying post-restore modifications...")
+            logger.info("Waiting a short interval before applying post-restore modifications...")
             time.sleep(30)
-                
-            
+
             if db_info.get('engine_lifecycle_support'):
                 modify_params['EngineLifecycleSupport'] = db_info['engine_lifecycle_support']
                 modifications_needed = True
-            
-            
+
             # Master password (required for triggering resetting-master-credentials state)
             if master_password:
                 modify_params['MasterUserPassword'] = master_password
                 modifications_needed = True
                 logger.info(f"Setting master password for RDS instance '{instance_identifier}'")
-            
+
             # Backup settings
-            # Always set BackupRetentionPeriod to the value from db_info (default 7)
             backup_retention_period = db_info.get('backup_retention_period', 7)
             modify_params['BackupRetentionPeriod'] = backup_retention_period
             modifications_needed = True
@@ -1970,25 +1978,11 @@ class RDSRecreator:
             
             if modifications_needed:
                 logger.info("Applying post-restore modifications...")
-                # Apply Performance Insights and tagging behavior if supplied in db_info
-                # Translate possible json keys to AWS API parameter names
-                # e.g., db_info may contain 'copy_tags_to_snapshot' or 'CopyTagsToSnapshot'
-                # if 'copy_tags_to_snapshot' in db_info and 'CopyTagsToSnapshot' not in modify_params:
-                # if 'copy_tags_to_snapshot' in db_info:
-                #     modify_params['CopyTagsToSnapshot'] = bool(db_info.get('copy_tags_to_snapshot'))
-                #     print("copy_tags_to_snapshot value is: ", modify_params['CopyTagsToSnapshot'])
-                # else:
-                #     modify_params['CopyTagsToSnapshot'] = bool(False) # Default to False if not specified
-                # elif 'CopyTagsToSnapshot' in db_info:
-                #     modify_params['CopyTagsToSnapshot'] = bool(db_info.get('CopyTagsToSnapshot'))
-
-                # Performance Insights flag
                 if 'performance_insights_enabled' in db_info and 'EnablePerformanceInsights' not in modify_params:
                     modify_params['EnablePerformanceInsights'] = bool(db_info.get('performance_insights_enabled'))
                 elif 'PerformanceInsightsEnabled' in db_info and 'EnablePerformanceInsights' not in modify_params:
                     modify_params['EnablePerformanceInsights'] = bool(db_info.get('PerformanceInsightsEnabled'))
 
-                # Optionally include KMS key id for Performance Insights
                 if db_info.get('performance_insights_kms_key_id'):
                     modify_params['PerformanceInsightsKMSKeyId'] = db_info.get('performance_insights_kms_key_id')
                 elif db_info.get('PerformanceInsightsKMSKeyId'):
@@ -1996,6 +1990,12 @@ class RDSRecreator:
 
                 self.rds_client.modify_db_instance(**modify_params)
                 logger.info("Post-restore modifications applied successfully")
+
+                if master_password:
+                    timeout = db_info.get('post_modify_wait_timeout', 600)
+                    logger.info(f"Waiting for RDS instance '{instance_identifier}' to finish resetting master password before continuing...")
+                    if not self._wait_for_rds_instance_ready(instance_identifier, timeout_seconds=timeout, poll_interval=5):
+                        logger.warning(f"RDS instance '{instance_identifier}' did not finish the reset/availability transitional state within {timeout}s.")
 
             return modifications_needed
         except ClientError as e:
@@ -2119,8 +2119,12 @@ class RDSRecreator:
                 # Apply post-restore modifications
                 post_restore_modified = self.apply_post_restore_modifications(writer_instance_identifier, db_info, is_aurora=True, master_password=master_password, cluster_identifier=cluster_identifier)
                 if post_restore_modified:
-                    if not self.wait_for_resource('db-instance', writer_instance_identifier, max_attempts=1000, require_reset=True):
-                        raise Exception("DB instance did not pass through resetting-master-credentials to available after post-restore modifications")
+                    # Aurora password changes are managed at the cluster level, so the instance
+                    # does not necessarily enter a separate DB-instance resetting-master-credentials
+                    # state. We only require the instance to become available after the cluster
+                    # reset completes.
+                    if not self.wait_for_resource('db-instance', writer_instance_identifier, max_attempts=1000):
+                        raise Exception("Aurora writer instance did not become available after cluster-level post-restore modifications")
                 print("7. good")
                 
                 # Get connection information

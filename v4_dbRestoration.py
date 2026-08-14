@@ -1780,7 +1780,7 @@ class RDSRecreator:
 
                 logger.info(
                     f"DB instance with status='{status}' is in transitional state:..."
-                    f"Pending modifications={pending}"
+                    f"\nPending modifications={pending}"
                 )
             except Exception as exc:
                 logger.warning(f"Error checking RDS instance state for '{instance_identifier}': {exc}")

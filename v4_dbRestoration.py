@@ -1867,6 +1867,7 @@ class RDSRecreator:
         )
         return False
 
+
     def _apply_aurora_post_restore_modifications(self, instance_identifier: str, cluster_identifier: str, db_info: Dict[str, Any], master_password: Optional[str] = "password") -> bool:
         """Apply Aurora cluster post-restore modifications"""
         # modify_db_cluster expects DBClusterIdentifier; keep instance identifier separate

@@ -31,6 +31,19 @@ For Aurora, <new_db_identifier> is used as the regional cluster identifier and [
 # venv/bin/python v4_dbRestoration.py oracle_metadata.json arn:aws:rds:us-west-2:123456789012:snapshot:oracle-snap us-west-2 arn:aws:secretsmanager:us-west-2:123456789012:secret:oracle-pass-ghi789 "username" "password" "only-restore" old-oracle-instance-identifier oracle-restored
 
 
+# Version of Python libraries used in this project:
+boto3           1.43.36
+botocore        1.43.36
+jmespath        1.1.0
+logging         0.4.9.6
+pip             25.2
+python-dateutil 2.9.0.post0
+s3transfer      0.19.0
+six             1.17.0
+tqdm            4.68.3
+typing          3.7.4.3
+urllib3         2.7.0
+
 import subprocess
 from tqdm import tqdm
 

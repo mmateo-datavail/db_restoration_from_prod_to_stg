@@ -1,0 +1,56 @@
+version: 0.2
+
+phases:
+
+  install:
+    commands:
+      - echo "INSTALL PHASE"
+
+      - python3 --version
+      - pip3 --version
+
+      - pip3 install --upgrade pip
+
+      - pip3 install -r requirements.txt
+
+  pre_build:
+    commands:
+
+      - echo "PRE_BUILD PHASE"
+
+      - chmod +x rds_metadata_extractor.sh
+
+      - aws --version
+
+      - aws sts get-caller-identity
+
+      - pwd
+
+      - ls -lah
+
+  build:
+    commands:
+
+      - echo "BUILD PHASE"
+
+      - |
+        python3 v4_dbRestoration.py \
+        ${JSON_FILE} \
+        ${SNAPSHOT_ARN} \
+        ${AWS_REGION_TARGET} \
+        ${SECRET_ARN} \
+        ${SECRET_USERNAME_KEY} \
+        ${SECRET_PASSWORD_KEY} \
+        ${MODE} \
+        ${OLD_DB_IDENTIFIER} \
+        ${NEW_DB_IDENTIFIER} \
+        ${NEW_DB_CLUSTER_IDENTIFIER}
+
+  post_build:
+    commands:
+
+      - echo "POST_BUILD PHASE"
+
+      - echo "Execution completed"
+
+      - date

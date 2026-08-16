@@ -20,6 +20,8 @@ phases:
 
       - chmod +x rds_metadata_extractor.sh
 
+      - chmod +x v4_dbRestoration.py
+
       - aws --version
 
       - aws sts get-caller-identity

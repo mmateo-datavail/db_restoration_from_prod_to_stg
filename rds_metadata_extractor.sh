@@ -6,16 +6,23 @@
 # chmod +x rds_metadata_extractor.sh
 
 # 2. AWS Authentication Options:
-#    Option A: Export AWS credentials (will override aws configure if set)
+#    Method 1: Export AWS credentials (highest priority)
 #    export AWS_ACCESS_KEY_ID="your-access-key"
 #    export AWS_SECRET_ACCESS_KEY="your-secret-key"
-#    export AWS_DEFAULT_REGION="your-region"  # optional, can also be provided as a command line argument"
-#    
-#    Option B: Use AWS configure (if credentials not exported)
+#    export AWS_DEFAULT_REGION="your-region"  # optional
+#
+#    Method 2: Use AWS configure with static credentials
 #    aws configure set aws_access_key_id your-access-key
 #    aws configure set aws_secret_access_key your-secret-key
 #    aws configure set default.region your-region
-
+#
+#    Method 3: Use AWS configure interactively (manual setup)
+#    aws configure
+#
+#    Method 4: Use a CodeBuild / Service Role attached to the project
+#    # No credentials in code. Attach IAM role to CodeBuild environment.
+#    # AWS CLI will resolve credentials automatically through the service role.
+#
 # 3. Authenticate with AWS STS get-caller-identity
 # aws sts get-caller-identity
 
@@ -37,49 +44,86 @@ set -e
 
 setup_aws_credentials() {
     echo "Setting up AWS credentials..."
-    
+
     # Check if AWS CLI is installed
     if ! command -v aws &> /dev/null; then
         echo "❌ ERROR: AWS CLI is not installed or not in PATH"
         echo "Please install AWS CLI: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
         exit 1
     fi
-    
-    # Check for exported environment variables first
-    if [[ -n "$AWS_ACCESS_KEY_ID" && -n "$AWS_SECRET_ACCESS_KEY" ]]; then
+
+    # Method 1 - Exported environment variables
+    if [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+        AWS_AUTH_METHOD=1
+        echo "Method #1"
         echo "✓ Using exported AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)"
-        
-        # Optionally set session token if provided
-        if [[ -n "$AWS_SESSION_TOKEN" ]]; then
+
+        if [[ -n "${AWS_SESSION_TOKEN:-}" ]]; then
             echo "✓ AWS_SESSION_TOKEN also detected"
         fi
-        
-        # Set default region from environment if available
-        if [[ -n "$AWS_DEFAULT_REGION" ]]; then
+
+        if [[ -n "${AWS_DEFAULT_REGION:-}" ]]; then
             echo "✓ Using AWS_DEFAULT_REGION: $AWS_DEFAULT_REGION"
         fi
-        
+
         return 0
     fi
-    
-    # Check if AWS configure has been set up
-    if aws configure list &> /dev/null; then
+
+    # Method 2 - aws configure with static credentials
+    if aws configure get aws_access_key_id &> /dev/null 2>&1; then
         local access_key=$(aws configure get aws_access_key_id 2>/dev/null || echo "")
         local secret_key=$(aws configure get aws_secret_access_key 2>/dev/null || echo "")
-        
+
         if [[ -n "$access_key" && -n "$secret_key" ]]; then
-            echo "✓ Using AWS configure credentials"
-            
-            # Get configured region
+            AWS_AUTH_METHOD=2
+            echo "Method #2"
+            echo "✓ Using AWS configure static credentials"
+
             local configured_region=$(aws configure get region 2>/dev/null || echo "")
             if [[ -n "$configured_region" ]]; then
                 echo "✓ Using configured region: $configured_region"
             fi
-            
+
             return 0
         fi
     fi
-    
+
+    # Method 3 - Interactive AWS configure (manual setup then script auto-detects it)
+    if [[ -f "${HOME}/.aws/config" || -f "${HOME}/.aws/credentials" ]]; then
+        local access_key=$(aws configure get aws_access_key_id 2>/dev/null || echo "")
+        local secret_key=$(aws configure get aws_secret_access_key 2>/dev/null || echo "")
+        local configured_region=$(aws configure get region 2>/dev/null || echo "")
+
+        if [[ -n "$access_key" && -n "$secret_key" ]] || [[ -n "$configured_region" ]]; then
+            AWS_AUTH_METHOD=3
+            echo "Method #3"
+            echo "✓ Using AWS configure credentials created interactively/manual setup"
+
+            if [[ -n "$configured_region" ]]; then
+                echo "✓ Using configured region: $configured_region"
+            fi
+
+            return 0
+        fi
+    fi
+
+    # Method 4 - CodeBuild / attached AWS Service Role (automatic)
+    if aws sts get-caller-identity --region "${AWS_DEFAULT_REGION:-${REGION:-us-east-1}}" &> /dev/null; then
+        AWS_AUTH_METHOD=4
+        echo "Method #4"
+        echo "✓ Using AWS service role / CodeBuild IAM role credentials"
+
+        if [[ -n "${CODEBUILD_BUILD_ID:-}" || -n "${CODEBUILD_ROLE_ARN:-}" || -n "${AWS_ROLE_ARN:-}" || -n "${AWS_WEB_IDENTITY_TOKEN_FILE:-}" || -n "${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}" ]]; then
+            echo "✓ Detected CodeBuild / service-role execution environment"
+        fi
+
+        if [[ -n "${AWS_DEFAULT_REGION:-}" ]]; then
+            echo "✓ Using AWS_DEFAULT_REGION: $AWS_DEFAULT_REGION"
+        fi
+
+        return 0
+    fi
+
     # No credentials found
     echo "❌ ERROR: No AWS credentials found!"
     echo ""
@@ -97,6 +141,10 @@ setup_aws_credentials() {
     echo ""
     echo "Method 3 - Use AWS configure interactively:"
     echo "  aws configure"
+    echo ""
+    echo "Method 4 - Use a service role / CodeBuild IAM role:"
+    echo "  # Attach the IAM role to the CodeBuild project/service"
+    echo "  # This script will use it automatically when running in CodeBuild."
     echo ""
     exit 1
 }
@@ -154,7 +202,7 @@ setup_region() {
 
 test_aws_connection() {
     echo "Testing AWS connection..."
-    
+
     # Test basic AWS connectivity
     if ! aws sts get-caller-identity --region "$REGION" &> /dev/null; then
         echo "❌ ERROR: Failed to connect to AWS"
@@ -168,13 +216,14 @@ test_aws_connection() {
         echo "Try running: aws sts get-caller-identity --region $REGION"
         exit 1
     fi
-    
+
     # Get caller identity for confirmation
     local caller_info=$(aws sts get-caller-identity --region "$REGION" 2>/dev/null)
     local account_id=$(echo "$caller_info" | jq -r '.Account' 2>/dev/null || echo "unknown")
     local user_arn=$(echo "$caller_info" | jq -r '.Arn' 2>/dev/null || echo "unknown")
-    
+
     echo "✓ AWS connection successful"
+    echo "  Authentication method used: Method #${AWS_AUTH_METHOD:-unknown}"
     echo "  Account ID: $account_id"
     echo "  User/Role: $user_arn"
     echo "  Region: $REGION"

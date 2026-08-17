@@ -30,56 +30,6 @@ For Aurora, <new_db_identifier> is used as the regional cluster identifier and [
 # # Oracle recreation WITHOUT Old DB deletion
 # venv/bin/python v4_dbRestoration.py oracle_metadata.json arn:aws:rds:us-west-2:123456789012:snapshot:oracle-snap us-west-2 arn:aws:secretsmanager:us-west-2:123456789012:secret:oracle-pass-ghi789 "username" "password" "only-restore" old-oracle-instance-identifier oracle-restored
 
-# AWS authentication methods:
-# Method 1 - Export environment variables:
-#   export AWS_ACCESS_KEY_ID='your-access-key'
-#   export AWS_SECRET_ACCESS_KEY='your-secret-key'
-#   export AWS_DEFAULT_REGION='your-region'  # optional
-#
-# Method 2 - Use AWS configure:
-#   aws configure set aws_access_key_id your-access-key
-#   aws configure set aws_secret_access_key your-secret-key
-#   aws configure set default.region your-region
-#
-# Method 3 - Use AWS configure interactively:
-#   aws configure
-#
-# Method 4 - Use the IAM Service Role attached to your AWS CodeBuild project (recommended for CodeBuild):
-#   - Attach a proper IAM role/service role to the CodeBuild project.
-#   - Add the required trust policy so the CodeBuild service can assume the role.
-#   - In CodeBuild, boto3 will use the project role automatically via the AWS SDK default credential chain.
-#   - No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY variables are required in CodeBuild.
-#
-# Example in CodeBuild environment:
-#   import boto3
-#   session = boto3.Session()
-#   sts = session.client('sts')
-#   print(sts.get_caller_identity())
-#
-# If you want to assume a role explicitly from code:
-#   import boto3
-#   role_arn = 'arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>'
-#   sts_client = boto3.client('sts')
-#   try:
-#       assumed = sts_client.assume_role(
-#           RoleArn=role_arn,
-#           RoleSessionName='db-restoration-session',
-#           DurationSeconds=3600
-#       )
-#       creds = assumed['Credentials']
-#       session = boto3.Session(
-#           aws_access_key_id=creds['AccessKeyId'],
-#           aws_secret_access_key=creds['SecretAccessKey'],
-#           aws_session_token=creds['SessionToken'],
-#           region_name='us-west-2'
-#       )
-#       rds_client = session.client('rds')
-#   except ClientError as e:
-#       logger.error(f"Failed to assume role: {e}")
-#
-# This script is compatible with the default AWS credential chain, meaning it can work in:
-# - local shells configured through AWS CLI or env vars
-# - EC2 / ECS / Lambda / CodeBuild with an attached IAM role
 
 # # Version of Python libraries used in this project:
 ## boto3           1.43.36
@@ -93,7 +43,6 @@ For Aurora, <new_db_identifier> is used as the regional cluster identifier and [
 ## tqdm            4.68.3
 ## typing          3.7.4.3
 ## urllib3         2.7.0
-
 
 import subprocess
 from tqdm import tqdm
@@ -282,14 +231,13 @@ class EngineSpecificValidator:
 class RDSRecreator:
     """Class to handle RDS instance recreation from JSON metadata and snapshot"""
     
-    def __init__(self, region: str, role_arn: Optional[str] = None):
+    def __init__(self, region: str):
         """Initialize the RDS recreator with AWS clients"""
         try:
             self.region = region
-            session = self._create_session(role_arn)
-            self.rds_client = session.client('rds', region_name=region)
-            self.ec2_client = session.client('ec2', region_name=region)
-            self.secrets_client = session.client('secretsmanager', region_name=region)
+            self.rds_client = boto3.client('rds', region_name=region)
+            self.ec2_client = boto3.client('ec2', region_name=region)
+            self.secrets_client = boto3.client('secretsmanager', region_name=region)
             self.validator = EngineSpecificValidator()
             logger.info(f"Initialized AWS clients for region: {region}")
         except NoCredentialsError:
@@ -297,36 +245,6 @@ class RDSRecreator:
             raise
         except Exception as e:
             logger.error(f"Failed to initialize AWS clients: {str(e)}")
-            raise
-
-    def _create_session(self, role_arn: Optional[str] = None) -> 'boto3.Session':
-        """Create a boto3 session, optionally assuming a role"""
-        try:
-            if role_arn:
-                logger.info(f"Assuming role: {role_arn}")
-                sts_client = boto3.client('sts')
-                assumed = sts_client.assume_role(
-                    RoleArn=role_arn,
-                    RoleSessionName='db-restoration-session'
-                )
-                creds = assumed['Credentials']
-                session = boto3.Session(
-                    aws_access_key_id=creds['AccessKeyId'],
-                    aws_secret_access_key=creds['SecretAccessKey'],
-                    aws_session_token=creds['SessionToken'],
-                    region_name=self.region
-                )
-                logger.info("Successfully assumed role")
-                return session
-            else:
-                logger.info("Using default AWS credentials")
-                session = boto3.Session()
-                creds = session.get_credentials()
-                if creds is None:
-                    logger.warning("No credentials found in default chain")
-                return session
-        except Exception as e:
-            logger.error(f"Failed to create session: {str(e)}")
             raise
 
     def _operation_supports_parameter(self, operation_name: str, parameter_name: str) -> bool:

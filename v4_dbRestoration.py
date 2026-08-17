@@ -2324,7 +2324,7 @@ def main():
     print(f"Mode: {mode}")
     print(f"Old DB Instance: {old_db_identifier}")
     
-    concatenatedStringAsCommand = "./rds_metadata_extractor.sh "+old_db_identifier+" > $PWD/02_metadata_extraction_report.txt"
+    concatenatedStringAsCommand = "./rds_metadata_extractor.sh "+old_db_identifier+ " " + region + " > $PWD/02_metadata_extraction_report.txt"
     cmdGroup10 = [
         "echo 'Command 1: AAAAAAAAAA'",
         concatenatedStringAsCommand,

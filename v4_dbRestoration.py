@@ -57,18 +57,25 @@ For Aurora, <new_db_identifier> is used as the regional cluster identifier and [
 #   print(sts.get_caller_identity())
 #
 # If you want to assume a role explicitly from code:
+#   import boto3
 #   role_arn = 'arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>'
-#   assumed = boto3.client('sts').assume_role(
-#       RoleArn=role_arn,
-#       RoleSessionName='db-restoration-session'
-#   )
-#   creds = assumed['Credentials']
-#   session = boto3.Session(
-#       aws_access_key_id=creds['AccessKeyId'],
-#       aws_secret_access_key=creds['SecretAccessKey'],
-#       aws_session_token=creds['SessionToken'],
-#       region_name='us-west-2'
-#   )
+#   sts_client = boto3.client('sts')
+#   try:
+#       assumed = sts_client.assume_role(
+#           RoleArn=role_arn,
+#           RoleSessionName='db-restoration-session',
+#           DurationSeconds=3600
+#       )
+#       creds = assumed['Credentials']
+#       session = boto3.Session(
+#           aws_access_key_id=creds['AccessKeyId'],
+#           aws_secret_access_key=creds['SecretAccessKey'],
+#           aws_session_token=creds['SessionToken'],
+#           region_name='us-west-2'
+#       )
+#       rds_client = session.client('rds')
+#   except ClientError as e:
+#       logger.error(f"Failed to assume role: {e}")
 #
 # This script is compatible with the default AWS credential chain, meaning it can work in:
 # - local shells configured through AWS CLI or env vars
@@ -275,13 +282,14 @@ class EngineSpecificValidator:
 class RDSRecreator:
     """Class to handle RDS instance recreation from JSON metadata and snapshot"""
     
-    def __init__(self, region: str):
+    def __init__(self, region: str, role_arn: Optional[str] = None):
         """Initialize the RDS recreator with AWS clients"""
         try:
             self.region = region
-            self.rds_client = boto3.client('rds', region_name=region)
-            self.ec2_client = boto3.client('ec2', region_name=region)
-            self.secrets_client = boto3.client('secretsmanager', region_name=region)
+            session = self._create_session(role_arn)
+            self.rds_client = session.client('rds', region_name=region)
+            self.ec2_client = session.client('ec2', region_name=region)
+            self.secrets_client = session.client('secretsmanager', region_name=region)
             self.validator = EngineSpecificValidator()
             logger.info(f"Initialized AWS clients for region: {region}")
         except NoCredentialsError:
@@ -289,6 +297,36 @@ class RDSRecreator:
             raise
         except Exception as e:
             logger.error(f"Failed to initialize AWS clients: {str(e)}")
+            raise
+
+    def _create_session(self, role_arn: Optional[str] = None) -> 'boto3.Session':
+        """Create a boto3 session, optionally assuming a role"""
+        try:
+            if role_arn:
+                logger.info(f"Assuming role: {role_arn}")
+                sts_client = boto3.client('sts')
+                assumed = sts_client.assume_role(
+                    RoleArn=role_arn,
+                    RoleSessionName='db-restoration-session'
+                )
+                creds = assumed['Credentials']
+                session = boto3.Session(
+                    aws_access_key_id=creds['AccessKeyId'],
+                    aws_secret_access_key=creds['SecretAccessKey'],
+                    aws_session_token=creds['SessionToken'],
+                    region_name=self.region
+                )
+                logger.info("Successfully assumed role")
+                return session
+            else:
+                logger.info("Using default AWS credentials")
+                session = boto3.Session()
+                creds = session.get_credentials()
+                if creds is None:
+                    logger.warning("No credentials found in default chain")
+                return session
+        except Exception as e:
+            logger.error(f"Failed to create session: {str(e)}")
             raise
 
     def _operation_supports_parameter(self, operation_name: str, parameter_name: str) -> bool:

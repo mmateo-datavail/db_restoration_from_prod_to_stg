@@ -2346,7 +2346,7 @@ def main():
         # for groupofCommands in groupOfCommands:
             execute_bash_commands(groupOfCommands[i], (1+i))        
         
-        test=execute_bash_conditional("""echo $PWD""")
+        test=execute_bash_conditional("""ls""")
         print("test var is:", test, sep="")        
         path_of_db_metadata = execute_bash_conditional("""export temp_var=$(tail -n 1 $PWD/02_metadata_extraction_report.txt); echo $temp_var""")
         print("temp_var (& path_of_db_metadata) is:", path_of_db_metadata, sep="")        

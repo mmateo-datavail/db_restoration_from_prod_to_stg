@@ -2335,7 +2335,6 @@ def main():
     ]
     
     cmdGroup11 = [ "echo 'Command 3: CCCCCCCCCC'"]
-
     
     groupOfCommands = [cmdGroup10,cmdGroup11]
     

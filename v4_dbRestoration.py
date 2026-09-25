@@ -428,9 +428,9 @@ class RDSRecreator:
                 'enabled_cloudwatch_logs_exports': self.safe_get(db_cluster, 'EnabledCloudwatchLogsExports', []),
                 'deletion_protection': self.safe_get(db_cluster, 'DeletionProtection', False),
                 'multi_az': self.safe_get(db_cluster, 'MultiAZ', False),
-                'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot', False),
+                # 'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot', True),
                 # 'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot', False),
-                # 'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot'),
+                'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot'),
                 'engine_mode': self.safe_get(db_cluster, 'EngineMode', 'provisioned'),
                 'auto_minor_version_upgrade': self.safe_get(db_cluster, 'AutoMinorVersionUpgrade', True),
                 'publicly_accessible': self.safe_get(db_cluster, 'PubliclyAccessible', False),
@@ -528,10 +528,13 @@ class RDSRecreator:
                 'port': self.safe_get(db_instance, 'DbInstancePort'),
                 'availability_zone': self.safe_get(db_instance, 'AvailabilityZone'),
                 'multi_az': self.safe_get(db_instance, 'MultiAZ', False),
-                'copy_tags_to_snapshot': self.safe_get(db_instance, 'CopyTagsToSnapshot', False),
+                # 'copy_tags_to_snapshot': self.safe_get(db_instance, 'CopyTagsToSnapshot', True),
+                # 'copy_tags_to_snapshot': self.safe_get(db_instance, 'CopyTagsToSnapshot', False),
+                'copy_tags_to_snapshot': self.safe_get(db_instance, 'CopyTagsToSnapshot'),
                 'backup_retention_period': self.safe_get(db_instance, 'BackupRetentionPeriod', 0),
                 'preferred_backup_window': self.safe_get(db_instance, 'PreferredBackupWindow'),
                 'preferred_maintenance_window': self.safe_get(db_instance, 'PreferredMaintenanceWindow'),
+                'engine_lifecycle_support': self.safe_get(db_instance, 'EngineLifecycleSupport'),
                 'auto_minor_version_upgrade': self.safe_get(db_instance, 'AutoMinorVersionUpgrade', True),
                 'deletion_protection': self.safe_get(db_instance, 'DeletionProtection', False),
                 'performance_insights_enabled': self.safe_get(db_instance, 'PerformanceInsightsEnabled', False),
@@ -1445,6 +1448,12 @@ class RDSRecreator:
         if db_info.get('availability_zone'):
             restore_params['AvailabilityZone'] = db_info['availability_zone']
         
+        # Engine Lifecycle Support
+        if db_info.get('engine_lifecycle_support'):
+            restore_params['EngineLifecycleSupport'] = db_info.get('engine_lifecycle_support')
+            print("(CLUSTER) engine_lifecycle_support value is: ", db_info.get('engine_lifecycle_support'))
+            # modifications_needed = True
+        
         # Parameter and subnet groups
         if cluster_param_group_name:
             restore_params['DBClusterParameterGroupName'] = cluster_param_group_name
@@ -1567,6 +1576,10 @@ class RDSRecreator:
             # Availability Zone
             if db_info.get('availability_zone'):
                 create_params['AvailabilityZone'] = db_info['availability_zone']
+                
+            # Copy Tags To Snapshot
+            if db_info.get('copy_tags_to_snapshot'):
+                create_params['CopyTagsToSnapshot'] = db_info.get('copy_tags_to_snapshot')
             
             if db_info.get('multi_az'):
                 print("multi_az value is: ", db_info.get('multi_az'))
@@ -1575,8 +1588,9 @@ class RDSRecreator:
             
             if db_info.get('engine_lifecycle_support'):
                 create_params['EngineLifecycleSupport'] = db_info.get('engine_lifecycle_support')
-                print("engine_lifecycle_support value is: ", db_info.get('engine_lifecycle_support'))
+                print("(CLUSTER INSTANCE) engine_lifecycle_support value is: ", db_info.get('engine_lifecycle_support'))
                 # modifications_needed = True
+                
             if db_info.get('preferred_maintenance_window'):
                 create_params['PreferredMaintenanceWindow'] = db_info['preferred_maintenance_window']
                 # modifications_needed = True
@@ -1969,9 +1983,9 @@ class RDSRecreator:
                             
                         
                         
-            if db_info.get('engine_lifecycle_support'):
-                cluster_modify_params['EngineLifecycleSupport'] = db_info['engine_lifecycle_support']
-                modifications_needed = True
+            # if db_info.get('engine_lifecycle_support'):
+            #     cluster_modify_params['EngineLifecycleSupport'] = db_info['engine_lifecycle_support']
+            #     modifications_needed = True
 
             # Master password (cluster-level for Aurora)
             if master_password:
@@ -2073,9 +2087,9 @@ class RDSRecreator:
             logger.info("Waiting a short interval before applying post-restore modifications...")
             time.sleep(30)
 
-            if db_info.get('engine_lifecycle_support'):
-                modify_params['EngineLifecycleSupport'] = db_info['engine_lifecycle_support']
-                modifications_needed = True
+            # if db_info.get('engine_lifecycle_support'):
+            #     modify_params['EngineLifecycleSupport'] = db_info['engine_lifecycle_support']
+            #     modifications_needed = True
 
             # Master password (required for triggering resetting-master-credentials state)
             if master_password:

@@ -402,6 +402,12 @@ class RDSRecreator:
         """Extract Aurora cluster information from metadata with robust error handling"""
         try:
             db_cluster = metadata.get('DBClusters', [{}])[0]
+            # Aurora cluster metadata often does not contain AvailabilityZone or
+            # DBInstanceClass; those values belong to the cluster members.  Use
+            # the first member as the fallback so restored clustered databases
+            # retain the source instance's placement, just like standalone RDS.
+            cluster_instances = metadata.get('DBInstances', []) or []
+            cluster_instance = cluster_instances[0] if cluster_instances else {}
             engine = db_cluster.get('Engine', '').lower()
             is_aurora_engine = self.is_aurora_engine(engine.lower())
             
@@ -423,11 +429,17 @@ class RDSRecreator:
                 'deletion_protection': self.safe_get(db_cluster, 'DeletionProtection', False),
                 'multi_az': self.safe_get(db_cluster, 'MultiAZ', False),
                 'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot', False),
+                # 'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot', False),
                 # 'copy_tags_to_snapshot': self.safe_get(db_cluster, 'CopyTagsToSnapshot'),
                 'engine_mode': self.safe_get(db_cluster, 'EngineMode', 'provisioned'),
                 'auto_minor_version_upgrade': self.safe_get(db_cluster, 'AutoMinorVersionUpgrade', True),
                 'publicly_accessible': self.safe_get(db_cluster, 'PubliclyAccessible', False),
-                'availability_zone': self.safe_get(db_cluster, 'AvailabilityZone')
+                'availability_zone': self.safe_get(
+                    db_cluster, 'AvailabilityZone',
+                ) or self.safe_get(cluster_instance, 'AvailabilityZone'),
+                'db_instance_class': self.safe_get(
+                    cluster_instance, 'DBInstanceClass'
+                ),
             }
             
             # Safely extract complex nested objects
@@ -956,6 +968,31 @@ class RDSRecreator:
         except Exception as e:
             logger.error(f"Failed to rename DB resources for '{db_instance_identifier}': {str(e)}")
             raise
+
+    def promote_db_resources(self, db_instance_identifier: str, target_instance_identifier: str,
+                             target_cluster_identifier: Optional[str] = None, max_attempts: int = 1000) -> str:
+        """Rename the restored database to the identifiers previously used by the old database."""
+        resources = self._resolve_db_resources(db_instance_identifier)
+        source_cluster = resources.get('cluster_id')
+        target_cluster = target_cluster_identifier or source_cluster
+        if source_cluster and source_cluster != target_cluster:
+            self.rds_client.modify_db_cluster(DBClusterIdentifier=source_cluster,
+                                               NewDBClusterIdentifier=target_cluster,
+                                               ApplyImmediately=True)
+            if not self._wait_for_db_identifier_rename('db-cluster', source_cluster, target_cluster,
+                                                       max_attempts=max_attempts, expected_status='available'):
+                raise Exception(f"Timed out waiting for DB cluster '{target_cluster}'")
+        for instance_id in resources.get('instance_ids', [db_instance_identifier]):
+            new_id = target_instance_identifier if instance_id == db_instance_identifier else instance_id
+            if new_id == instance_id:
+                continue
+            self.rds_client.modify_db_instance(DBInstanceIdentifier=instance_id,
+                                               NewDBInstanceIdentifier=new_id,
+                                               ApplyImmediately=True)
+            if not self._wait_for_db_identifier_rename('db-instance', instance_id, new_id,
+                                                       max_attempts=max_attempts, expected_status='available'):
+                raise Exception(f"Timed out waiting for DB instance '{new_id}'")
+        return f"Promoted restored resources to '{target_instance_identifier}'."
 
     def delete_db_resources(self, db_instance_identifier: str, max_attempts: int = 1000, skip_final_snapshot: bool = True) -> str:
         """Delete a DB instance and related cluster/replicas, waiting until deletion is confirmed."""
@@ -2374,24 +2411,12 @@ def main():
             except Exception as e:
                 logger.warning(f"Could not determine old DB resource type: {str(e)}. Proceeding with PHASE 1 rename attempt.")
 
-        if perform_stop_and_delete:
-            # PHASE 1: Rename old Database resources by appending '-OLD'
-            print("PHASE 1: Renaming old DB resources.")
-            rename_db_resources = recreator.rename_db_resources(old_db_identifier)
-            print("PHASE 1 completed: DB resources renamed.")
-            
-            if not ("Renamed" in rename_db_resources):
-                print("Failed to rename DB resources.")
-                current_string = time.ctime()
-                print("Ending execution at:", current_string)
-                sys.exit(1)
-
-        # PHASE 2: Gather old Database metadata and snapshot, and Recreate new Database from mentioned files
-        print("PHASE 2: Recreating new Database.")
+        # PHASE 1: Recreate and configure the replacement while the old DB keeps its name.
+        print("PHASE 1: Recreating new Database.")
         result = recreator.recreate_rds_instance(
             json_file_path, snapshot_arn, new_db_identifier, secret_arn, username_secret_key, password_secret_key, new_db_cluster_identifier
         )
-        print("PHASE 2 completed: New Database Recreated.")
+        print("PHASE 1 completed: New Database Recreated.")
         
         if result['success']:
             print("\n" + "=" * 60)
@@ -2419,12 +2444,12 @@ def main():
             
             print("\nMaster password has been set from AWS Secrets Manager.")
             
-            # PHASE 3: Apply SQL configurations
-            print("\nPHASE 3: Applying SQL configurations...")
+            # PHASE 2: Apply SQL configurations.
+            print("\nPHASE 2: Applying SQL configurations...")
             try:
                 print("\nBeginning... ")
                 print("\nIn progress...")
-                print("\nPHASE 3 completed: SQL configurations applied successfully.")
+                print("\nPHASE 2 completed: SQL configurations applied successfully.")
                 
             except Exception as e:
                 print(f"\nUnexpected error: {str(e)}")
@@ -2432,14 +2457,32 @@ def main():
                 print("Ending execution at:", current_string)
                 sys.exit(1)
             
-            # PHASE 4: Delete old Database (only if mode is restore-and-delete)
+            # PHASE 3: Rename the old resources only after the replacement is ready.
             if perform_stop_and_delete:
-                print("\nPHASE 4:Deleting old DB resources...")
+                print("\nPHASE 3: Renaming old DB resources.")
                 try:
-                    old_db_identifier = old_db_identifier + "-old"
-                    print("PHASE 4: Deleting old: ", old_db_identifier)
-                    delete_response = recreator.delete_db_resources(old_db_identifier)
-                    print("\nPHASE 4 completed: Old DB resources removed successfully. Status: ", delete_response)
+                    rename_response = recreator.rename_db_resources(old_db_identifier)
+                    print("PHASE 3 completed: ", rename_response)
+
+                    # PHASE 4: Give the replacement the old production identifiers.
+                    print("\nPHASE 4: Promoting new DB resources to old identifiers.")
+                    # The optional cluster argument identifies the replacement
+                    # cluster, not the production cluster.  Use the original
+                    # cluster identifier captured before PHASE 3 renamed it;
+                    # otherwise source_cluster == target_cluster and the
+                    # replacement cluster is never renamed.
+                    promoted_cluster = None
+                    if result.get('is_aurora'):
+                        promoted_cluster = (old_db_resources.get('cluster_id')
+                                            if 'old_db_resources' in locals() else None)
+                    promote_response = recreator.promote_db_resources(
+                        new_db_identifier, old_db_identifier, promoted_cluster)
+                    print("PHASE 4 completed: ", promote_response)
+
+                    # PHASE 5: Delete the renamed old resources.
+                    print("\nPHASE 5: Deleting old DB resources...")
+                    delete_response = recreator.delete_db_resources(old_db_identifier + "-OLD")
+                    print("\nPHASE 5 completed: Old DB resources removed successfully. Status: ", delete_response)
                     print("\n\nProcess successfully completed, DB recreation finished for", new_db_identifier)
                     current_string = time.ctime()
                     print("Ending execution at:", current_string)

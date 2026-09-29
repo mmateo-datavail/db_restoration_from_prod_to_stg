@@ -893,6 +893,20 @@ class RDSRecreator:
                     cluster_rename_complete = False
 
                 if not cluster_rename_complete:
+                    # RDS rejects ModifyDBCluster while an automated/manual
+                    # backup is running. Wait for the cluster to leave states
+                    # such as backing-up before attempting the rename.
+                    logger.info(f"Waiting for DB cluster '{cluster_id}' to become available before rename...")
+                    if not self.wait_for_resource(
+                        'db-cluster', cluster_id,
+                        max_attempts=max_attempts,
+                        expected_status='available'
+                    ):
+                        raise Exception(
+                            f"DB cluster '{cluster_id}' did not become available; "
+                            "skipping rename rather than modifying it in a busy state"
+                        )
+
                     logger.info(f"Renaming DB cluster '{cluster_id}' to '{new_cluster_id}'")
                     try:
                         self.rds_client.modify_db_cluster(
@@ -2426,11 +2440,11 @@ def main():
                 logger.warning(f"Could not determine old DB resource type: {str(e)}. Proceeding with PHASE 1 rename attempt.")
 
         # PHASE 1: Recreate and configure the replacement while the old DB keeps its name.
-        print("PHASE 1: Recreating new Database.")
+        print("THE PHASE 1: Recreating new Database.")
         result = recreator.recreate_rds_instance(
             json_file_path, snapshot_arn, new_db_identifier, secret_arn, username_secret_key, password_secret_key, new_db_cluster_identifier
         )
-        print("PHASE 1 completed: New Database Recreated.")
+        print("THE PHASE 1 completed: New Database Recreated.")
         
         if result['success']:
             print("\n" + "=" * 60)

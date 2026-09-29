@@ -126,6 +126,23 @@ cmdGroup4 = [
   "echo 'Starting the Recovery backup process...'",
 ]
 
+# cmdGroup5 = [
+#   """
+#   curl --request GET \
+# --url 'https://helios.cohesity.com/v2/mcm/data-protect/protection-groups/Inscope-LCAD-DBS90?includeLastRunInfo=true' \
+# --header 'accept: application/json' \
+# --header 'apiKey: <APIKEY>'
+#   """
+# ]
+cmdGroup6 = [
+  """
+  psql 'host=agverdict-xyz.abc.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c " \
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cropsights' AND pid <> pg_backend_pid(); \
+ALTER DATABASE \"cropsights\" RENAME TO \"cropsights_staging\"; \
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'data_platform' AND pid <> pg_backend_pid(); \
+ALTER DATABASE \"data_platform\" RENAME TO \"data_platform_staging\";
+  """
+]
 
 # print(execute_multiple_bash_commands(cmdGroup1,1))
 
@@ -152,56 +169,56 @@ cmdGroup4 = [
 
 #############################################
 
-### MAKES SILENT THIS EXECUTION, JUST SHOW THE OUTPUTS !!!
-db2insta_password = input("Please type the password for the db2insta user on LXATL00LCDDBS36.logisticare.com:\n")
-# print("This one: ", db2insta_password)
+# ### MAKES SILENT THIS EXECUTION, JUST SHOW THE OUTPUTS !!!
+# db2insta_password = input("Please type the password for the db2insta user on LXATL00LCDDBS36.logisticare.com:\n")
+# # print("This one: ", db2insta_password)
 
-cmdGroup5 = [
-  "Beginning the Delete of Backup files in TR1 (Training-NON PROD server) of the previous week",
-  # Execute a "rm *" bash command remotely, on the machine "LXATL00LCDDBS36.logisticare.com" (TR1), on the specific paths: "/backup_coh/backup1" and "/backup_coh/backup2",
-  # all of this as "db2insta" user.
-  # "#",
-  # "sudo su - db2insta; rm -rf /backup_coh/backup1/**",
-  # Similar to:ssh -t mateo@172.17.0.1 -p 2222 'sudo rm -rf /home/mateo/cmon/**'
-  # "ssh -t db2insta@LXATL00LCDDBS36.logisticare.com -p 22 'sudo rm -rf /home/mateo/cmon/**'",
-  # "rm -rf /backup_coh/backup2/**",
+# cmdGroup5 = [
+#   "Beginning the Delete of Backup files in TR1 (Training-NON PROD server) of the previous week",
+#   # Execute a "rm *" bash command remotely, on the machine "LXATL00LCDDBS36.logisticare.com" (TR1), on the specific paths: "/backup_coh/backup1" and "/backup_coh/backup2",
+#   # all of this as "db2insta" user.
+#   # "#",
+#   # "sudo su - db2insta; rm -rf /backup_coh/backup1/**",
+#   # Similar to:ssh -t mateo@172.17.0.1 -p 2222 'sudo rm -rf /home/mateo/cmon/**'
+#   # "ssh -t db2insta@LXATL00LCDDBS36.logisticare.com -p 22 'sudo rm -rf /home/mateo/cmon/**'",
+#   # "rm -rf /backup_coh/backup2/**",
   
   
-  # Execute a sudo command on a remote machine using SSH and SSH_ASKPASS helper
+#   # Execute a sudo command on a remote machine using SSH and SSH_ASKPASS helper
 
-  'REMOTE_USER="mateo"',
-  'REMOTE_HOST="172.17.0.1"',
+#   'REMOTE_USER="mateo"',
+#   'REMOTE_HOST="172.17.0.1"',
   
-  # 'REMOTE_USER="db2insta"',
-  # 'REMOTE_HOST="LXATL00LCDDBS36.logisticare.com"',
-  'MYPASSWORD="{db2insta_password}"',
+#   # 'REMOTE_USER="db2insta"',
+#   # 'REMOTE_HOST="LXATL00LCDDBS36.logisticare.com"',
+#   'MYPASSWORD="{db2insta_password}"',
   
-  """
-  # Creation of the file password.txt on the home folder of the remote system
-  sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "echo $MYPASSWORD > /home/password.txt; touch /backup_coh/backup1/deleteThisFile.txt"
-  sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "echo $MYPASSWORD > /home/password.txt; touch /backup_coh/backup2/deleteThisFile.txt"
-  """,
+#   """
+#   # Creation of the file password.txt on the home folder of the remote system
+#   sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "echo $MYPASSWORD > /home/password.txt; touch /backup_coh/backup1/deleteThisFile.txt"
+#   sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "echo $MYPASSWORD > /home/password.txt; touch /backup_coh/backup2/deleteThisFile.txt"
+#   """,
   
-  # """
-  # # # Execution of the command which needs the sudo privileges (on remote system) using sshpass
-  # # sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo -S < /home/password.txt sudo rm -rf /backup_coh/backup1/**"
-  # # sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo -S < /home/password.txt sudo rm -rf /backup_coh/backup2/**"
-  # # # The '<' directs file password.txt as input to sudo
-  # # """,
-  """
-  # Execution of the command which needs the sudo privileges (on remote system) using sshpass
-  sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo -S < /home/password.txt sudo ls /"
-  # The '<' directs file password.txt as input to sudo
-  """,
+#   # """
+#   # # # Execution of the command which needs the sudo privileges (on remote system) using sshpass
+#   # # sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo -S < /home/password.txt sudo rm -rf /backup_coh/backup1/**"
+#   # # sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo -S < /home/password.txt sudo rm -rf /backup_coh/backup2/**"
+#   # # # The '<' directs file password.txt as input to sudo
+#   # # """,
+#   """
+#   # Execution of the command which needs the sudo privileges (on remote system) using sshpass
+#   sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo -S < /home/password.txt sudo ls /"
+#   # The '<' directs file password.txt as input to sudo
+#   """,
   
-  """
-  # Deletion of the file password.txt
-  sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "rm /home/password.txt"
-  """    
-]
-#
+#   """
+#   # Deletion of the file password.txt
+#   sshpass -p $MYPASSWORD ssh ${REMOTE_USER}@${REMOTE_HOST} "rm /home/password.txt"
+#   """    
+# ]
+# #
 
-execute_multiple_bash_commands(cmdGroup5, 5)
+execute_multiple_bash_commands(cmdGroup6, 6)
 
 ### ___________ Recovery backup process ___________
 
@@ -252,7 +269,7 @@ execute_multiple_bash_commands(cmdGroup5, 5)
 # Maybe, the status of the while should be taken from "Recovery task" (The API call to perform recovery should output the ID of the task, which can be used to check
 # the status of the recovery task until it is completed), this one has the groups of PARTS that are being Recovered.
 
-cmdGroup6 = [
+cmdGroup99 = [
 
   # # # ... files whose names contain the given pattern
   # # """find /home/mateo/cmon -type f | awk -v pat="LCAD_ATL" 'index($0, pat) > 0 {print}'"""

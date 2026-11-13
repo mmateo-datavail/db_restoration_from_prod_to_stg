@@ -2,7 +2,7 @@ import subprocess
 from tqdm import tqdm
 import time
 import boto3
-import paramiko
+# import paramiko
 import sys
 import os
 from datetime import datetime
@@ -134,16 +134,40 @@ cmdGroup4 = [
 # --header 'apiKey: <APIKEY>'
 #   """
 # ]
+
+# For "cropsights-staging-temporal"
 cmdGroup6 = [
   """
-  psql 'host=agverdict-xyz.abc.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c " \
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cropsights' AND pid <> pg_backend_pid(); \
-ALTER DATABASE \"cropsights\" RENAME TO \"cropsights_staging\"; \
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'data_platform' AND pid <> pg_backend_pid(); \
-ALTER DATABASE \"data_platform\" RENAME TO \"data_platform_staging\";
+  PGPASSWORD='test1' psql 'host=cropsights-staging-instance-1-temporal.TEST.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cropsights' AND pid <> pg_backend_pid();\
+ALTER DATABASE cropsights RENAME TO cropsights_staging;\
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'data_platform' AND pid <> pg_backend_pid();\
+ALTER DATABASE data_platform RENAME TO data_platform_staging;"
   """
 ]
 
+# For "agverdict-staging-rds-temporal"
+prueba = "AY-------MAMITA"
+cmdGroup7 = [
+  """
+  PGPASSWORD='test2' psql 'host=THE_HOST port=5432 user=postgres dbname=postgres' <<'EOF'
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'RisingTide' AND pid <> pg_backend_pid();\
+ALTER DATABASE "RisingTide" RENAME TO "Agverdict_Staging";
+EOF
+"""
+]
+print("cmdGroup7 pre replacement: ", cmdGroup7)
+cmdGroup7[0] = cmdGroup7[0].replace("THE_HOST", prueba)
+print("cmdGroup7 pos replacement: ", cmdGroup7)
+
+
+# cmdGroup8 = [
+#   "export THE_HOST={}"+prueba+"",
+#   """echo $THE_HOST; echo $PWD"""
+# ]
+
+
+# execute_multiple_bash_commands(cmdGroup8, 8)
 # print(execute_multiple_bash_commands(cmdGroup1,1))
 
 # # output = execute_multiple_bash_commands(cmdGroup2,1)
@@ -218,7 +242,11 @@ ALTER DATABASE \"data_platform\" RENAME TO \"data_platform_staging\";
 # ]
 # #
 
-execute_multiple_bash_commands(cmdGroup6, 6)
+# For "cropsights-staging-temporal"
+# execute_multiple_bash_commands(cmdGroup6, 6)
+
+# For "agverdict-staging-rds-temporal"
+# execute_multiple_bash_commands(cmdGroup7, 7)
 
 ### ___________ Recovery backup process ___________
 

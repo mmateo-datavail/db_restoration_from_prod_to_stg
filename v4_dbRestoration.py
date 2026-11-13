@@ -2459,7 +2459,10 @@ def main():
                 print(f"DB Instance Identifier: {result['db_identifier']}")
             
             conn_info = result['connection_info']
+            current_address = ""
+            
             if conn_info.get('endpoint'):
+                current_address = conn_info['endpoint']
                 print(f"Endpoint: {conn_info['endpoint']}")
                 if conn_info.get('reader_endpoint'):
                     print(f"Reader Endpoint: {conn_info['reader_endpoint']}")
@@ -2470,13 +2473,38 @@ def main():
                 if conn_info.get('database_name'):
                     print(f"Database Name: {conn_info['database_name']}")
             
+            
             print("\nMaster password has been set from AWS Secrets Manager.")
             
             # PHASE 2: Apply SQL configurations.
             print("\nPHASE 2: Applying SQL configurations...")
             try:
                 print("\nBeginning... ")
-                print("\nIn progress...")
+                # print("\nIn progress...")
+                
+#                 master_username = recreator.get_secret_value(secret_arn, username_secret_key)
+#                 master_password = recreator.get_secret_value(secret_arn, password_secret_key)
+#                 # For "cropsights-staging"
+#                 cmdGroup6 = [
+#                     """
+#                     PGPASSWORD='test1' psql 'host=cropsights-staging-instance-1-temporal.cj96b8jcosr7.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
+# SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cropsights' AND pid <> pg_backend_pid();\
+# ALTER DATABASE cropsights RENAME TO cropsights_staging;\
+# SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'data_platform' AND pid <> pg_backend_pid();\
+# ALTER DATABASE data_platform RENAME TO data_platform_staging;"
+#                     """
+#                 ]
+
+#                 # For "agverdict-staging-rds"
+#                 cmdGroup7 = [
+#                     """
+#                     PGPASSWORD='test2' psql 'host=agverdict-staging-rds-temporal.cj96b8jcosr7.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
+# SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'RisingTide' AND pid <> pg_backend_pid();\
+# ALTER DATABASE RisingTide RENAME TO Agverdict_Staging;"
+#                     """
+#                 ]
+                
+                
                 print("\nPHASE 2 completed: SQL configurations applied successfully.")
                 
             except Exception as e:
@@ -2509,8 +2537,9 @@ def main():
 
                     # PHASE 5: Delete the renamed old resources.
                     print("\nPHASE 5: Deleting old DB resources...")
-                    delete_response = recreator.delete_db_resources(old_db_identifier + "-OLD")
-                    print("\nPHASE 5 completed: Old DB resources removed successfully. Status: ", delete_response)
+                    # delete_response = recreator.delete_db_resources(old_db_identifier + "-OLD")
+                    # print("\nPHASE 5 completed: Old DB resources removed successfully. Status: ", delete_response)
+                    print("\nPHASE 5 completed: Old DB resources removed successfully. Status: DONE WITHOUT DELETION (for safety).")
                     print("\n\nProcess successfully completed, DB recreation finished for", new_db_identifier)
                     current_string = time.ctime()
                     print("Ending execution at:", current_string)

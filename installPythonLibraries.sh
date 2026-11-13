@@ -50,8 +50,7 @@ if ! command -v python3 &> /dev/null || ! "$VENV_DIR/bin/python3" -c 'import sys
   source "$VENV_DIR/bin/activate"
 fi
 
-PIP_CMD="$VENV_DIR/bin/python3 -m pip"
-"$PIP_CMD" install --upgrade pip setuptools wheel
+"$VENV_DIR/bin/python3" -m pip install --upgrade pip setuptools wheel
 
 # Extract import statements and get unique module names
 IMPORTS=$(grep -E '^\s*(import|from) ' "$PYTHON_FILE" | \
@@ -61,7 +60,11 @@ IMPORTS=$(grep -E '^\s*(import|from) ' "$PYTHON_FILE" | \
 
 # Try to install each module via pip
 for module in $IMPORTS; do
-  pip3 install "$module"
+  package="$module"
+  if [[ "$module" == "pptx" ]]; then
+    package="python-pptx"
+  fi
+  "$VENV_DIR/bin/python3" -m pip install "$package"
 done
 
 echo "All detected modules installed in virtual environment '$VENV_DIR'."

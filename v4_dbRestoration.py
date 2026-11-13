@@ -2399,7 +2399,7 @@ def main():
         "cat $PWD/02_metadata_extraction_report.txt; echo '\n\n'",
     ]
     
-    cmdGroup11 = [ "echo 'Command 3: CCCCCCCCCC'"]
+    cmdGroup11 = [ "echo 'Command 3: BBBBBBBBB'" ]
     
     groupOfCommands = [cmdGroup10,cmdGroup11]
     
@@ -2481,28 +2481,31 @@ def main():
             try:
                 print("\nBeginning... ")
                 # print("\nIn progress...")
+                # finalCommandToExecute = 
                 
-#                 master_username = recreator.get_secret_value(secret_arn, username_secret_key)
-#                 master_password = recreator.get_secret_value(secret_arn, password_secret_key)
-#                 # For "cropsights-staging"
-#                 cmdGroup6 = [
-#                     """
-#                     PGPASSWORD='test1' psql 'host=cropsights-staging-instance-1-temporal.cj96b8jcosr7.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
-# SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cropsights' AND pid <> pg_backend_pid();\
-# ALTER DATABASE cropsights RENAME TO cropsights_staging;\
-# SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'data_platform' AND pid <> pg_backend_pid();\
-# ALTER DATABASE data_platform RENAME TO data_platform_staging;"
-#                     """
-#                 ]
+                master_username = recreator.get_secret_value(secret_arn, username_secret_key)
+                master_password = recreator.get_secret_value(secret_arn, password_secret_key)
+                # For "cropsights-staging"
+                
+                
+                cmdGroup6 = [
+                    """
+                    PGPASSWORD='test1' psql 'host=cropsights-staging-instance-1-temporal.cj96b8jcosr7.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cropsights' AND pid <> pg_backend_pid();\
+ALTER DATABASE cropsights RENAME TO cropsights_staging;\
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'data_platform' AND pid <> pg_backend_pid();\
+ALTER DATABASE data_platform RENAME TO data_platform_staging;"
+                    """
+                ]
 
-#                 # For "agverdict-staging-rds"
-#                 cmdGroup7 = [
-#                     """
-#                     PGPASSWORD='test2' psql 'host=agverdict-staging-rds-temporal.cj96b8jcosr7.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
-# SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'RisingTide' AND pid <> pg_backend_pid();\
-# ALTER DATABASE RisingTide RENAME TO Agverdict_Staging;"
-#                     """
-#                 ]
+                # For "agverdict-staging-rds"
+                cmdGroup7 = [
+                    """
+                    PGPASSWORD='test2' psql 'host=agverdict-staging-rds-temporal.cj96b8jcosr7.us-west-2.rds.amazonaws.com port=5432 user=postgres dbname=postgres' -c "\
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'RisingTide' AND pid <> pg_backend_pid();\
+ALTER DATABASE RisingTide RENAME TO Agverdict_Staging;"
+                    """
+                ]
                 
                 
                 print("\nPHASE 2 completed: SQL configurations applied successfully.")
@@ -2537,9 +2540,10 @@ def main():
 
                     # PHASE 5: Delete the renamed old resources.
                     print("\nPHASE 5: Deleting old DB resources...")
-                    # delete_response = recreator.delete_db_resources(old_db_identifier + "-OLD")
-                    # print("\nPHASE 5 completed: Old DB resources removed successfully. Status: ", delete_response)
-                    print("\nPHASE 5 completed: Old DB resources removed successfully. Status: DONE WITHOUT DELETION (for safety).")
+                    delete_response = recreator.delete_db_resources(old_db_identifier + "-OLD")
+                    print("\nPHASE 5 completed: Old DB resources removed successfully. Status: ", delete_response)
+                    # print("\nPHASE 5 completed: Old DB resources removed successfully. Status: DONE WITHOUT DELETION (for safety).")
+                    
                     print("\n\nProcess successfully completed, DB recreation finished for", new_db_identifier)
                     current_string = time.ctime()
                     print("Ending execution at:", current_string)
